@@ -3,3 +3,25 @@ title: "simulating_experiment"
 output: html_document
 ---
 
+```{r}
+pacman::p_load(tidyverse)
+
+```
+
+```{r}
+features = c("eyes", "buffness", "arms", "spots", "color")
+
+df = expand.grid(rep(list(c(0, 1)), length(features)))
+
+colnames(df) = features
+```
+
+
+```{r}
+df <- df %>% 
+  mutate(dangerous = ifelse((eyes == 1 & spots == 1), 1, 0), 
+         nutricious = ifelse((arms == 1), 1, 0)) 
+
+df_shuffled <- df[sample(nrow(df)), ]
+```
+
