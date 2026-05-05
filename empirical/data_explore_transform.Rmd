@@ -17,6 +17,7 @@ pacman::p_load("here", "tidyverse")
 # loading data
 data <- read_delim("/Users/christianstenbro/AU/MSc/ACM/assignment_4_LOCAL/AlienData.txt")
 ```
+
 ```{r}
 data
 ```
@@ -27,11 +28,62 @@ We can remove the .jpg extension from the stimulus column (which is the feature 
 data$stimulus <- str_replace(data$stimulus, ".jpg", "")
 ```
 
-# Visualization
-
+# understanding the variables
 ```{r}
-data
+summary(data)
 ```
 
+What are these variables? 
 
+- competence
+- motivation
+- communication
+- complement
+
+For now, we will not use them in the model.
+
+There are also these variables:
+
+- condition
+- session 
+- cycle
+
+Which might be (probably are) relevant for the modelling. I wonder how we can learn more about them?
+
+Notice: "You should then visually explore the empirical data and fit the Stan model to them. **Fitting the model by participant and sticking to 1 session** is sufficient to pass."
+
+# data subset
+
+First, we select only the relevant columns and remove data that are not session 1: 
+
+```{r}
+data_subset <- data %>% select(condition, 
+                               subject, 
+                               session,
+                               cycle,
+                               trial,
+                               test,
+                               stimulus,
+                               category,
+                               response,
+                               dangerous,
+                               nutricious,
+                               correct) %>% filter(session == 1)
+```
+
+```{r}
+data_subset
+```
+
+```{r}
+length(unique(data_subset$subject))
+```
+
+# data visualization
+
+How can we start exploring this data?
+
+Perhaps a good first step would be to visualize, for a few round, how a participant updates their responses based on the feedback.
+
+Potential problem: We are modelling a four-option response (tracking two binary dimensions) as a two-option response. How do we go about this practically? Did the participants receive direct feedback on whether their categorization was correct on both dimensions, or just a black-box correct/incorrect feedback?
 
