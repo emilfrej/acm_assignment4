@@ -1,0 +1,379 @@
+---
+title: "simulating_data.rmd"
+output: html_document
+date: "2026-05-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse)
+```
+
+## R Markdown
+
+
+#setup kalman filter agent
+
+
+```{r}
+aliens <- expand_grid(
+  a = 0:1,
+  b = 0:1,
+  c = 0:1,
+  d = 0:1,
+  e = 0:1
+) %>% 
+  mutate(danger = b)
+
+
+```
+
+
+
+
+Single position kalman update
+```{r}
+mu0 = 1
+sigma0 = 1
+
+#def single kalman update, given previous mean, previous uncertainty in mu (a vector of coordinates), observation and assumend noise in enviroment, and process noise (drift in latent state). Note that sigma, obs_noise and process_noise are given in SDs. 
+kalman_update <- function(mu_prev, sigma_prev, obs, obs_noise, process_noise){
+  
+  #pred location. Not necessary, since its a static target model, ie no predictable movement assumed between measurements. 
+  mu_pred <- mu_prev
+  
+  #pred sigma
+  sigma_pred <- sqrt( sigma_prev^2 + process_noise^2 )
+  
+  #find k
+  k <- sigma_pred^2 / (sigma_pred^2 + obs_noise^2)
+  
+  #find prediction error between estimated mu and obs
+  PE <- obs - mu_pred
+  
+  #update estimate of state as weighted mean of error and last estimate
+  mu_new <- mu_pred + k * PE
+  
+  #update sigma
+  sigma_new <- sqrt( (1-k) * sigma_pred^2 )
+  
+  #prep output list
+  output_list = list(mu = mu_new, sigma = sigma_new, k = k)
+  
+  return(output_list)
+}
+
+
+
+```
+
+
+Test it out
+```{r}
+
+x <- seq(0 , 30, by = .5)
+
+
+
+mus <- c()
+sigmas <- c()
+ks <- c()
+obs <- c()
+
+#start config
+mu = 1
+sigma = 1
+
+
+
+for (t in x){
+  
+  #generated noised obs
+  noised_observation <- rnorm(n=1,mean = 2, sd =3)
+  obs <- c(obs, noised_observation)
+  
+  
+  update <- kalman_update(mu_prev = mu, sigma_prev = sigma, obs_noise = 3, obs=noised_observation, process_noise=0.1)
+  
+  mu <- update$mu
+  sigma <- update$sigma
+  K <- update$k
+  
+  mus <- c(mus, mu)
+  sigmas <- c(sigmas, sigma)
+  ks <- c(ks, K)
+}
+
+
+plot(x,obs)
+points(x, mus, col = "red")
+
+```
+
+Make multivariate kalman filter without motion model
+```{r}
+mvr_kalman_update <- function(mu_prev_vec, sigma_prev_mat, obs_vec, obs_noise_mat, process_noise_mat){
+  
+  #get number of states for matrix construction
+  n_dim <- length(mu_prev_vec)
+  
+  ## Prediction step ## 
+  #update mu_pred but assume its constant
+  mu_pred_vec <- mu_prev_vec
+  
+  #update predicted var-covar matrix for state estimate 
+  sigma_pred_mat <- sigma_prev_mat + process_noise_mat
+  
+  ## Update step ## 
+  #Get gain matrix. IE, sigma_prev * (sigma_prev + obs_noise_mat)^{-1}. #maybe add safeguard to matrix-inv
+  K_mat = sigma_pred_mat %*% solve(sigma_pred_mat+obs_noise_mat)
+  
+  #get PE matrix
+  PE_vec = obs_vec - mu_pred_vec
+  
+  #update state vec
+  mu_new_vec <- mu_pred_vec + K_mat %*% PE_vec
+  
+  #Update state var-covariance matrix. (I-K) * sigma_pred. #maybe add numerical safeguard
+  sigma_new_mat <- (diag(n_dim) - K_mat) %*% sigma_pred_mat
+  
+  ## Output ## 
+  output_list <- list(mu_vec = mu_new_vec, sigma_mat = sigma_new_mat, K_mat = K_mat )
+  return(output_list)
+}
+```
+testing it out
+```{r}
+library(MASS)
+
+## setup loop
+mu <- c(-3, 5) # mean vector
+Noise_mat <- matrix(c(1, 0.5, 0.5, 2), nrow = 2)  # covariance matrix
+Sigma <- matrix(c(0.1, 0.2, 0.1, 0.3), nrow = 2)
+n <- 100
+samples <- mvrnorm(n = n, mu = mu, Sigma = Noise_mat) # observations
+mu = c(10,-10) #start mu
+
+## setup storage
+n <- length(samples)
+mus1    <- numeric(n)
+mus2 <- numeric(n)
+sigmas <- numeric(n)
+ks     <- numeric(n)
+obs1    <- numeric(n)
+obs2 <- numeric(n)
+time <- numeric(n)
+
+## 
+for (i in 1:nrow(samples)){
+  #get mu
+  obs <- samples[i, ]
+  
+  #apply update
+  update <- mvr_kalman_update(mu_prev_vec=mu, sigma_prev_mat=Sigma, obs_vec=obs, obs_noise_mat=Noise_mat, process_noise_mat= Noise_mat)
+  
+  #extract updates
+  mu       <- update$mu_vec
+  Sigma    <- update$sigma_mat
+  
+  #store
+  mus1[i] <- mu[1]
+  mus2[i] <- mu[2]
+  obs1[i] <- obs[1]
+  obs2[i] <- obs[2]
+  time[i] <- i
+  
+  
+}
+  
+
+
+```
+
+
+
+```{r}
+mvr_kalman_df <- tibble(mus1, mus2, obs1, obs2, time) 
+mvr_kalman_df <- mvr_kalman_df %>% 
+  mutate(dim_1_error = obs1 - mus1,
+         dim_2_error = obs2 - mus2)  %>% 
+  dplyr::select(time, dim_1_error, dim_2_error) %>% 
+  pivot_longer(c(dim_1_error, dim_2_error), names_to = "dimension", values_to = "errors") %>% 
+  filter(time < 50)
+  
+ggplot(mvr_kalman_df, aes(time, errors, color = dimension)) +
+  geom_line()
+```
+```{r}
+mvr_kalman_df <- tibble(mus1, mus2, obs1, obs2, time) 
+mvr_kalman_df <- mvr_kalman_df  %>% 
+  dplyr::select(time, mus1, mus2) %>% 
+  pivot_longer(c(mus1, mus2), names_to = "dimension", values_to = "estimates") %>% 
+  filter(time < 50)
+  
+ggplot(mvr_kalman_df, aes(time, estimates, color = dimension)) +
+  geom_line()
+```
+
+Make agent function
+```{r}
+#sigma diagonal vals
+sigma_diag_val <- 2.5
+mu_vec_size <- 5
+
+
+#make a function to construct a list of states/prototypes estimates consisting of a location vec, var_covar matrix and an index
+construct_state_list <- function(n_dim, n_prototypes){
+  
+  #prep empty list
+  state_list <- vector("list", n_prototypes)
+
+  # make a state for each prototype
+  for (i in 1:n_prototypes){
+    #make state of correct number of dimensions
+    state <- list(mu = rep(0, n_dim), sigma = diag(sigma_diag_val, n_dim) + 1, state_index = i)
+    
+    #store in list
+    state_list[[i]] <- state
+  } 
+  return (state_list)
+}
+
+
+
+#function for updating all prototypes/state estimates within in a trial
+update_prototypes <- function(trial_features, trial_feedback, state_list, agent_obs_noise_mat, agent_process_noise_mat){
+  
+    ## Then loop over all prototypes / states on the trial and update them
+    for (j in 1:length(state_list)){
+      
+      #getvals for current prototype on trial
+      mu_vec <- state_list[[j]]$mu
+      sigma_mat <- state_list[[j]]$sigma
+      state_type <- state_list[[j]]$state_index
+      
+      cat("state index:", state_type)
+      cat("feedback:", trial_feedback)
+      
+      #if prototype index corresponds to feedback then do a kalman update and update corresponding state/prototype
+      if (trial_feedback == state_type){
+        print("kalman update")
+        
+        #do kalman update
+        update <- mvr_kalman_update(mu_prev_vec = mu_vec, 
+                                    sigma_prev_mat = sigma_mat,
+                                    obs_vec = trial_features, 
+                                    obs_noise_mat = agent_obs_noise_mat,
+                                    process_noise_mat = agent_process_noise_mat)
+      
+        #update the state list
+        state_list[[j]]$mu <- update$mu_vec
+        state_list[[j]]$sigma <- update$sigma_mat
+        
+        #get k for storage
+        K_mat <- update$K_mat
+      }
+      
+      #else add drift (Q) to sigma
+      else{
+        #
+        print("no kalman update")
+        state_list[[j]]$sigma <- state_list[[j]]$sigma + agent_process_noise_mat
+      }
+    }
+  
+  return (state_list)
+}
+
+#where:
+  #features is list of n_dim vectors. One for each trial
+  #feedback is a list of ints describing the state type one for each trial
+agent_loop <- function(n_dim, n_prototypes, n_trials, features, feedback, agent_obs_noise, agent_process_noise){
+  
+  ### setup agent ###
+  #make agent observation noise matrix (R)
+  agent_obs_noise_mat = agent_obs_noise * diag(n_dim)
+    
+  #make agent process noise matrix (Q)
+  agent_process_noise_mat = agent_process_noise * diag(n_dim)
+  
+  #build a state_list of prototypes. One for each prototype 
+  state_list <- construct_state_list(n_dim = n_dim, n_prototypes = n_prototypes)
+  
+  #prep empty list to store state, obs and k for each trial
+  results <- vector("list", n_trials)
+  
+  ### run trials ###
+  for (i in 1:n_trials){
+    
+    cat("trial: ", i)
+    cat("\n")
+    
+    ## on trial:
+    #get features.     "Should prop check that features and n_dim match"
+    trial_features <- features[[i]]
+    
+    #get feedback, ie what state type was the trial
+    trial_feedback <- feedback[i] 
+    
+    # Then loop over all prototypes / states on the trial and update according to kalman filter if state is the same as observed, 
+    # if not just add process noise.
+    state_list <- update_prototypes(trial_features = trial_features,
+                                    trial_feedback = trial_feedback,
+                                    state_list = state_list,
+                                    agent_obs_noise_mat = agent_obs_noise_mat,
+                                    agent_process_noise_mat = agent_process_noise_mat)
+    
+    #print
+    cat("\n")
+    #store the state list
+    results[[i]] <- state_list
+  }
+  #return results
+  return(results)
+}
+
+
+```
+
+
+```{r}
+
+#make feature vec depending on type of index
+n_dim = 2
+n_prototypes = 2
+n_trials = 100
+mu_1 = c(2,1)
+mu_2 = c(10,1)
+
+#index for creating testing vectors
+feedback <- rbinom(100, size=1, prob =.5) + 1
+
+#make sigma for mvr_norm
+Sigma <- matrix(c(0.5, 0.2, 0.1, 0.3), nrow = 2)
+
+
+#make features
+features <- vector("list", n_trials)
+for (i in 1:n_trials){
+  if (feedback[i] == 1){
+    sample <- mvrnorm(n=1,mu=mu_1, Sigma=Sigma)
+  } else{
+    sample <- mvrnorm(n=1, mu=mu_2, Sigma=Sigma)
+  } 
+  features[[i]] <- sample
+}
+
+
+## TEST OUT IF IT STILL TRACKS CORRECT STATES
+results <- agent_loop(n_dim=2, n_prototypes=2, n_trials=n_trials, features=features, feedback=feedback, agent_obs_noise=0.1, agent_process_noise=0.1)
+
+```
+
+```{r}
+
+```
+
+
+
+
