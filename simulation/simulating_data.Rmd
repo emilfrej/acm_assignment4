@@ -6,112 +6,46 @@ date: "2026-05-01"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-pacman::p_load(tidyverse)
-```
-
-## R Markdown
-
-
-#setup kalman filter agent
-
-
-```{r}
-aliens <- expand_grid(
-  a = 0:1,
-  b = 0:1,
-  c = 0:1,
-  d = 0:1,
-  e = 0:1
-) %>% 
-  mutate(danger = b)
-
+pacman::p_load(tidyverse, mvtnorm)
 
 ```
 
+Run the entire script to produce *simulated_alien_prototype.csv* for 25 agents.
 
+Script for forward simulation of n agents tracking j prototypes in k dimensions.
 
+Set configs in the following chunk
 
-Single position kalman update
 ```{r}
-mu0 = 1
-sigma0 = 1
+n_agents <- 25
+n_dim <- 5
+n_prototypes <- 4
 
-#def single kalman update, given previous mean, previous uncertainty in mu (a vector of coordinates), observation and assumend noise in enviroment, and process noise (drift in latent state). Note that sigma, obs_noise and process_noise are given in SDs. 
-kalman_update <- function(mu_prev, sigma_prev, obs, obs_noise, process_noise){
-  
-  #pred location. Not necessary, since its a static target model, ie no predictable movement assumed between measurements. 
-  mu_pred <- mu_prev
-  
-  #pred sigma
-  sigma_pred <- sqrt( sigma_prev^2 + process_noise^2 )
-  
-  #find k
-  k <- sigma_pred^2 / (sigma_pred^2 + obs_noise^2)
-  
-  #find prediction error between estimated mu and obs
-  PE <- obs - mu_pred
-  
-  #update estimate of state as weighted mean of error and last estimate
-  mu_new <- mu_pred + k * PE
-  
-  #update sigma
-  sigma_new <- sqrt( (1-k) * sigma_pred^2 )
-  
-  #prep output list
-  output_list = list(mu = mu_new, sigma = sigma_new, k = k)
-  
-  return(output_list)
-}
+#set r and q dists. note they are before log
+q_mean <-  -2
+q_sd <- 1
+
+r_mean = 0
+r_sd = 1
+
+#difference between conditions **
+q_mean_diff <- -2
+r_mean_diff <- -2
 
 
+#set starting values for all prototypes
+start_mu <- .5
+start_sigma <-  10
+
+#save path
+save_path <- "simulated_data.csv"
 
 ```
 
 
-Test it out
+## Function definitions
 ```{r}
-
-x <- seq(0 , 30, by = .5)
-
-
-
-mus <- c()
-sigmas <- c()
-ks <- c()
-obs <- c()
-
-#start config
-mu = 1
-sigma = 1
-
-
-
-for (t in x){
-  
-  #generated noised obs
-  noised_observation <- rnorm(n=1,mean = 2, sd =3)
-  obs <- c(obs, noised_observation)
-  
-  
-  update <- kalman_update(mu_prev = mu, sigma_prev = sigma, obs_noise = 3, obs=noised_observation, process_noise=0.1)
-  
-  mu <- update$mu
-  sigma <- update$sigma
-  K <- update$k
-  
-  mus <- c(mus, mu)
-  sigmas <- c(sigmas, sigma)
-  ks <- c(ks, K)
-}
-
-
-plot(x,obs)
-points(x, mus, col = "red")
-
-```
-
-Make multivariate kalman filter without motion model
-```{r}
+#def mvr kalman update for tracking a single prototype one step
 mvr_kalman_update <- function(mu_prev_vec, sigma_prev_mat, obs_vec, obs_noise_mat){
   
   #get number of states for matrix construction
@@ -141,11 +75,7 @@ mvr_kalman_update <- function(mu_prev_vec, sigma_prev_mat, obs_vec, obs_noise_ma
   output_list <- list(mu_vec = mu_new_vec, sigma_mat = sigma_new_mat, K_mat = K_mat )
   return(output_list)
 }
-```
 
-
-Make agent function
-```{r}
 
 #make a function to construct a list of states/prototypes estimates consisting of a location vec, var_covar matrix and an index
 construct_state_list <- function(n_dim, n_prototypes, start_mu, start_sigma){
@@ -163,7 +93,6 @@ construct_state_list <- function(n_dim, n_prototypes, start_mu, start_sigma){
   } 
   return (state_list)
 }
-
 
 
 #function for updating all prototypes/state estimates within in a trial. Update this to return choice as well**
@@ -246,7 +175,7 @@ sample_choice <- function(state_list){
 return(choice)
 }
 
-
+# make a function for looping over all trials for a single agent
 #where:
   #features is list of n_dim vectors. One for each trial
   #feedback is a list of ints describing the state type one for each trial
@@ -299,121 +228,11 @@ agent_loop <- function(n_dim, n_prototypes, n_trials, features, feedback, agent_
 }
 
 
-```
-
-
-
-
-```{r}
-
-#make feature vec depending on type of index
-n_dim = 2
-n_prototypes = 2
-n_trials = 20
-mu_1 = c(2,1)
-mu_2 = c(2,1.5)
-
-#index for creating testing vectors
-feedback <- rbinom(100, size=1, prob =.5) + 1
-
-#make sigma for mvr_norm
-Sigma <- matrix(c(0.5, 0.2, 0.1, 0.3), nrow = 2)
-
-
-#make features
-features <- vector("list", n_trials)
-for (i in 1:n_trials){
-  if (feedback[i] == 1){
-    sample <- mvrnorm(n=1,mu=mu_1, Sigma=Sigma)
-  } else{
-    sample <- mvrnorm(n=1, mu=mu_2, Sigma=Sigma)
-  } 
-  features[[i]] <- sample
-}
-
-
-## TEST OUT IF IT STILL TRACKS CORRECT STATES
-results <- agent_loop(n_dim=2, 
-                      n_prototypes=2,
-                      n_trials=n_trials, 
-                      features=features, feedback=feedback, agent_obs_noise=0.1, agent_process_noise=0.1, start_mu = .5, start_sigma = 10)
-
-```
-
-```{r}
-## COMPLETE CLAUDE TEST## 
-##
-
-# Build one df per prototype; rows = trials, cols = mu dimensions
-mu_dfs <- lapply(1:n_prototypes, function(j) {
-  mu_mat <- do.call(rbind, lapply(1:n_trials, function(i) as.vector(results[[i]]$state_list[[j]]$mu)))
-  df <- as_tibble(mu_mat, .name_repair = "minimal")
-  colnames(df) <- paste0("dim_", seq_len(n_dim))
-  df$trial <- seq_len(n_trials)
-  df$prototype <- j
-  df
-})
-
-
-obs_df <- do.call(rbind, lapply(1:n_trials, function(i) {
-  tibble(dim_1 = features[[i]][1], dim_2 = features[[i]][2], prototype = factor(feedback[i]))
-}))
-
-true_mus <- tibble(
-  dim_1 = c(mu_1[1], mu_2[1]),
-  dim_2 = c(mu_1[2], mu_2[2]),
-  prototype = factor(1:2)
-)
-
-bind_rows(mu_dfs) %>%
-  mutate(prototype = factor(prototype)) %>%
-  ggplot(aes(dim_1, dim_2, color = prototype)) +
-  geom_path() +
-  geom_point(data = obs_df, alpha = 0.3, size = 1.5) +
-  geom_point(data = ~filter(.x, trial == 1), shape = 15, size = 3) +
-  geom_point(data = ~filter(.x, trial == max(trial)), shape = 17, size = 3) +
-  geom_point(data = true_mus, shape = 8, size = 4, stroke = 1.5) +
-  labs(x = "Dim 1", y = "Dim 2", color = "Prototype",
-       caption = "Points = observations, path = mu trajectory, square = start, triangle = end, star = true mu") +
-  theme_minimal()
-```
-# next step
-make an loop that initilizes agents:
-  sample qs 
-  and rs
-  
-  run agent for trial
-  
-and outputs a df of choice behavoir in the format as emperical data.
-
-```{r}
-results_df <- tibble(
-  trial    = 1:n_trials,
-  choice   = sapply(1:n_trials, function(i) results[[i]]$choice),
-  feedback = feedback[1:n_trials]
-) %>%
-  mutate(
-    correct             = as.integer(choice == feedback),
-    cumulative_accuracy = cumsum(correct) / trial
-  )
-
-ggplot(results_df, aes(x = trial, y = cumulative_accuracy)) +
-  geom_line() +
-  geom_hline(yintercept = 0.5, linetype = "dashed", color = "gray50") +
-  ylim(0, 1) +
-  labs(x = "Trial", y = "Cumulative Accuracy", title = "Cumulative Accuracy Over Trials") +
-  theme_minimal()
-```
-
-
-```{r}
-#make schedule
-n_dim <- 5
-n_prototypes <- 2
-
-stimuli_combinations <- do.call(expand_grid, setNames(rep(list(0:1), n_dim), paste0("dim_", 1:n_dim)))
-
+# make function for shuffling stimuli presentation according to experiment description
 make_stimuli_order <- function(){
+  
+  
+  stimuli_combinations <- do.call(expand_grid, setNames(rep(list(0:1), n_dim), paste0("dim_", 1:n_dim)))
   
   num_stimuli = 32
   num_blocks = 3
@@ -452,11 +271,9 @@ make_stimuli_order <- function(){
       )
     ) 
 }
-```
 
-```{r}
 #def function to loop over number of agents
-sim_agents <- function(n_agents, q_mean, q_sd, r_mean, r_sd, start_mu, start_sigma){
+sim_agents <- function(n_agents, q_mean, q_sd, r_mean, r_sd, start_mu, start_sigma, condition = "A"){
 
   agent_results <- vector("list", n_agents)
 
@@ -467,11 +284,16 @@ sim_agents <- function(n_agents, q_mean, q_sd, r_mean, r_sd, start_mu, start_sig
     log_q <- rnorm(1, mean = q_mean, sd = q_sd)
     log_r <- rnorm(1, mean = r_mean, sd = r_sd)
 
+    #shuffle stimuli order within each block and evaluate changing rules for all stimuli
     stimuli_df <- make_stimuli_order()
 
+    # get all stimuli out
     features <- pmap(stimuli_df %>% dplyr::select(starts_with("dim_")), c)
-    feedback  <- stimuli_df$feedback  # remap 0/1 -> 1/2 to match state indices
+    
+    #get all stimuli 
+    feedback  <- stimuli_df$feedback  
 
+    #loop over trials
     results <- agent_loop(n_dim = n_dim,
                           n_prototypes = 4,
                           n_trials = nrow(stimuli_df),
@@ -482,103 +304,83 @@ sim_agents <- function(n_agents, q_mean, q_sd, r_mean, r_sd, start_mu, start_sig
                           start_mu = start_mu, 
                           start_sigma = start_sigma)
 
-    agent_results[[i]] <- list(agent_id = i, log_q = log_q, log_r = log_r,
-                               stimuli_df = stimuli_df, results = results)
+    #store everything
+    choices <- sapply(results, `[[`, "choice")
+    agent_results[[i]] <- list(
+      trial_df = bind_cols(
+        tibble(
+          subject_id = i,
+          trial      = seq_along(results),
+          block      = stimuli_df$block,
+          choice     = choices
+        ),
+        stimuli_df %>% dplyr::select(starts_with("dim_")),
+        tibble(
+          feedback         = feedback,
+          danger_true      = stimuli_df$danger,
+          nutrition_true   = stimuli_df$nutrition,
+          danger_choice    = as.integer(choices %in% c(3, 4)),
+          nutrition_choice = as.integer(choices %in% c(2, 4)),
+          log_q            = log_q,
+          log_r            = log_r,
+          condition        = condition
+        )
+      ),
+      state_trajectories = lapply(results, `[[`, "state_list")
+    )
   }
-
   return(agent_results)
 }
 
-test_results <- sim_agents(n_agents = 2, q_mean = -2, q_sd = 1, r_mean = 0, r_sd = 1, start_mu =.5, start_sigma = 10)
-
-# cumulative accuracy per agent
-accuracy_df <- map_dfr(seq_along(test_results), function(i) {
-  agent <- test_results[[i]]
-  n_t <- length(agent$results)
-  tibble(
-    trial    = 1:n_t,
-    agent_id = i,
-    choice   = sapply(1:n_t, function(t) agent$results[[t]]$choice),
-    feedback = agent$stimuli_df$danger + 1
-  ) %>%
-    mutate(
-      block               = ceiling(trial / 32),
-      trial_in_block      = ((trial - 1) %% 32) + 1,
-      correct             = as.integer(choice == feedback)
-    ) %>%
-    group_by(block) %>%
-    mutate(cumulative_accuracy = cumsum(correct) / trial_in_block) %>%
-    ungroup()
-})
-
-ggplot(accuracy_df, aes(x = trial_in_block, y = cumulative_accuracy, color = factor(agent_id))) +
-  geom_line() +
-  geom_hline(yintercept = 0.5, linetype = "dashed", color = "gray50") +
-  ylim(0, 1) +
-  facet_wrap(~block, labeller = label_both) +
-  labs(x = "Trial within block", y = "Cumulative Accuracy", color = "Agent") +
-  theme_minimal()
-
-# prototype location trajectories (dim_1 vs dim_2)
-mu_df <- map_dfr(seq_along(test_results), function(i) {
-  agent <- test_results[[i]]
-  n_t <- length(agent$results)
-  map_dfr(1:2, function(j) {
-    map_dfr(1:n_t, function(t) {
-      mu <- agent$results[[t]]$state_list[[j]]$mu
-      tibble(trial = t, agent_id = i, prototype = j, dim_1 = mu[1], dim_2 = mu[2])
-    })
-  })
-})
-
-# add block to mu_df (32 stimuli per block)
-mu_df <- mu_df %>%
-  mutate(block = ceiling(trial / 32))
-
-# true prototype means per block (mean feature vector for each category)
-true_mus <- map_dfr(1:3, function(b) {
-  stimuli_combinations %>%
-    mutate(
-      prototype = if (b == 1) as.integer(dim_1 == 1 & dim_3 == 1) + 1
-                  else if (b == 2) as.integer(dim_4 == 1) + 1
-                  else as.integer(dim_4 == 1 & dim_5 == 1) + 1
-    ) %>%
-    group_by(prototype) %>%
-    summarise(dim_1 = mean(dim_1), dim_2 = mean(dim_2), .groups = "drop") %>%
-    mutate(block = b)
-})
-
-ggplot(mu_df, aes(x = dim_1, y = dim_2, color = factor(prototype),
-                  group = interaction(agent_id, prototype))) +
-  geom_path() +
-  geom_point(data = true_mus, aes(x = dim_1, y = dim_2, color = factor(prototype)),
-             shape = 8, size = 4, stroke = 1.5, inherit.aes = FALSE) +
-  facet_wrap(~block, labeller = label_both) +
-  labs(x = "Dim 1", y = "Dim 2", color = "Prototype",
-       caption = "Star = true prototype mean") +
-  theme_minimal()
-
 ```
 
 
-
+# Run simulation
 ```{r}
+results_A <- sim_agents(n_agents = n_agents,
+                        q_mean = q_mean,
+                        q_sd = q_sd,
+                        r_mean = r_mean,
+                        r_sd = r_sd,
+                        start_mu = start_mu,
+                        start_sigma = start_sigma,
+                        condition = "A")
 
-test_results_100 <- sim_agents(n_agents = 100, q_mean = -2, q_sd = 1, r_mean = 0, r_sd = 1, start_mu =.5, start_sigma = 10)
+#sim condition b with offsets
+results_B <- sim_agents(n_agents = n_agents,
+                        q_mean = q_mean+q_mean_diff,
+                        q_sd = q_sd,
+                        r_mean = r_mean+r_mean_diff,
+                        r_sd = r_sd,
+                        start_mu = start_mu,
+                        start_sigma = start_sigma,
+                        condition = "B")
+
+output_df <- bind_rows(
+  bind_rows(lapply(results_A, `[[`, "trial_df")),
+  bind_rows(lapply(results_B, `[[`, "trial_df"))
+) 
 ```
 
+
 ```{r}
-accuracy_df_100 <- map_dfr(seq_along(test_results_100), function(i) {
-  agent <- test_results_100[[i]]
-  n_t <- length(agent$results)
-  tibble(
-    trial    = 1:n_t,
-    agent_id = i,
-    choice   = sapply(1:n_t, function(t) agent$results[[t]]$choice),
-    feedback = agent$stimuli_df$danger + 1
-  ) %>%
+#rename features for stan and only keep condition A
+output_df %>% 
+  rename(eyes = dim_1,
+         buffness = dim_2,
+         arms = dim_3,
+         spots = dim_4,
+         color = dim_5) %>% 
+  filter(condition == "A")  %>% 
+  write_csv(save_path)
+```
+
+
+## Plotting accuracy
+```{r}
+accuracy_df_100 <- map_dfr(c(results_A, results_B), function(agent) {
+  agent$trial_df %>%
     mutate(
-      block          = ceiling(trial / 32),
       trial_in_block = ((trial - 1) %% 32) + 1,
       correct        = as.integer(choice == feedback)
     ) %>%
@@ -588,23 +390,59 @@ accuracy_df_100 <- map_dfr(seq_along(test_results_100), function(i) {
 })
 
 accuracy_df_100 %>%
-  group_by(block, trial_in_block) %>%
+  group_by(condition, block, trial_in_block) %>%
   summarise(
     mean_acc = mean(cumulative_accuracy),
     lo       = quantile(cumulative_accuracy, 0.1),
     hi       = quantile(cumulative_accuracy, 0.9),
     .groups  = "drop"
   ) %>%
-  ggplot(aes(x = trial_in_block, y = mean_acc)) +
-  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2) +
+  ggplot(aes(x = trial_in_block, y = mean_acc, color = condition, fill = condition)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2, color = NA) +
   geom_line() +
   geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray50") +
   ylim(0, 1) +
   facet_wrap(~block, labeller = label_both) +
   labs(x = "Trial within block", y = "Cumulative Accuracy",
-       caption = "Line = mean, ribbon = 80% interval across 100 agents") +
+       caption = "Line = mean, ribbon = 80% interval across agents") +
+  theme_minimal()
+
+
+# danger and nutrition accuracy
+accuracy_df_100 %>%
+  mutate(
+    danger_correct    = as.integer(danger_choice == danger_true),
+    nutrition_correct = as.integer(nutrition_choice == nutrition_true)
+  ) %>%
+  group_by(subject_id, condition, block) %>%
+  mutate(
+    cum_acc_danger    = cumsum(danger_correct) / trial_in_block,
+    cum_acc_nutrition = cumsum(nutrition_correct) / trial_in_block
+  ) %>%
+  ungroup() %>%
+  pivot_longer(cols = c(cum_acc_danger, cum_acc_nutrition),
+               names_to = "category", values_to = "cat_accuracy",
+               names_prefix = "cum_acc_") %>%
+  group_by(condition, block, trial_in_block, category) %>%
+  summarise(
+    mean_acc = mean(cat_accuracy),
+    lo       = quantile(cat_accuracy, 0.1),
+    hi       = quantile(cat_accuracy, 0.9),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = trial_in_block, y = mean_acc, color = condition, fill = condition)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2, color = NA) +
+  geom_line() +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "gray50") +
+  ylim(0, 1) +
+  facet_grid(category ~ block, labeller = label_both) +
+  labs(x = "Trial within block", y = "Cumulative Accuracy",
+       caption = "Line = mean, ribbon = 80% interval across agents") +
   theme_minimal()
 ```
+
+
+
 
 
 
