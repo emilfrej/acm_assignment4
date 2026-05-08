@@ -1,4 +1,9 @@
 ---
+title: "fitting_simulated_data"
+output: html_document
+---
+
+---
 title: "fitting_empirical_data"
 output: html_document
 ---
@@ -8,31 +13,7 @@ pacman::p_load(tidyverse, here, tidyverse, posterior, cmdstanr, brms, bayesplot,
 ```
 
 ```{r}
-data <- read_delim(here("empirical/AlienData.txt"))
-```
-
-
-```{r}
-transformed_data <- data %>% select(condition, 
-                                    subject, 
-                                    trial,
-                                    session,
-                                    cycle,
-                                    category, 
-                                    response,
-                                    stimulus) %>%
-                              filter(cycle != 0) %>% 
-                              filter(condition == 1) %>% 
-                              mutate(subject = ifelse(condition == 1, subject, subject + 26)) %>% 
-                              mutate(stimulus = str_remove(stimulus, "\\.jpg$"),
-                                     eyes = str_sub(stimulus, 1, 1),
-                                     buffness = str_sub(stimulus, 2, 2),
-                                     arms = str_sub(stimulus, 3, 3),
-                                     spots = str_sub(stimulus, 4, 4),
-                                     color = str_sub(stimulus, 5, 5)
-                                    ) %>% 
-                              mutate(across(c(eyes, buffness, arms, spots, color), as.numeric)) %>% 
-                              select(-stimulus)
+data <- read_delim(here("simulation", "data_file_name_here.csv"))
 ```
 
 
@@ -43,9 +24,7 @@ model <- cmdstan_model(stan_file,
                        stanc_options = list("O1"))
 fits <- list()
 
-test_ids <- c(unique(transformed_data$subject)[1:5]
-
-for (id in test_ids) {
+for (id in c(unique(data$subject))) {
   
   cat("Fitting participant", id, "\n")
   
@@ -78,7 +57,7 @@ for (id in test_ids) {
 }
 
 draws_list <- lapply(fits, function(fit) as_draws_df(fit$draws()))
-saveRDS(draws_list, here("empirical", "empirical_draws.rds"))
+saveRDS(draws_list, here("simulation", "simulated_draws.rds"))
 ```
 
 
@@ -117,7 +96,3 @@ summary_df %>%
   ) %>%
   print()
 ```
-
-
-
-

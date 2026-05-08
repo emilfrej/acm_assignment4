@@ -1,0 +1,213 @@
+---
+title: "empirical_fit_model_checks"
+output: html_document
+---
+
+```{r}
+pacman::p_load(here, cmdstanr, tidyverse, posterior, bayesplot, ggplot2, patchwork)
+```
+
+```{r}
+draws_list <- readRDS(here("empirical", "empirical_draws.rds"))
+```
+
+
+```{r}
+
+# Helper functions
+make_update_df <- function(prior, posterior) {
+  bind_rows(
+    tibble(value = prior,     type = "Prior"),
+    tibble(value = posterior, type = "Posterior")
+  )
+}
+
+make_update_plot <- function(df, title, xlab) {
+  ggplot(df, aes(x = value, fill = type, color = type)) +
+    geom_density(alpha = 0.3) +
+    scale_fill_manual(values  = c("Prior" = "blue", "Posterior" = "red")) +
+    scale_color_manual(values = c("Prior" = "blue", "Posterior" = "red")) +
+    labs(title = title, x = xlab, y = "Density", fill = NULL, color = NULL) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+```
+
+```{r}
+
+# Plot for each participant
+for (id in names(draws_list)) {
+  
+  draws <- draws_list[[id]]
+  
+  # On log scale
+  df_logr <- make_update_df(draws$logr_prior, draws$log_r)
+  df_logq <- make_update_df(draws$logq_prior, draws$log_q)
+  
+  # On natural scale
+  df_r <- make_update_df(exp(draws$logr_prior), draws$r_value)
+  df_q <- make_update_df(exp(draws$logq_prior), draws$q_value)
+  
+  p_logr <- make_update_plot(df_logr, title = "Log R",    xlab = "log_r")
+  p_logq <- make_update_plot(df_logq, title = "Log Q",    xlab = "log_q")
+  p_r    <- make_update_plot(df_r,    title = "R (natural scale)", xlab = "r_value")
+  p_q    <- make_update_plot(df_q,    title = "Q (natural scale)", xlab = "q_value")
+  
+  print(
+    (p_logr | p_logq) / (p_r | p_q) +
+      plot_annotation(
+        title = paste("Prior-Posterior Update: Participant", id),
+        theme = theme(plot.title = element_text(size = 14, face = "bold"))
+      )
+  )
+}
+```
+
+```{r}
+all_ids <- names(draws_list)
+
+posterior_df <- map_dfr(all_ids, function(id) {
+  draws <- draws_list[[id]]
+  tibble(
+    id      = id,
+    log_r   = draws$log_r,
+    log_q   = draws$log_q,
+    r_value = draws$r_value,
+    q_value = draws$q_value
+  )
+})
+
+# Color palette — one color per participant
+n_ids  <- length(all_ids)
+colors <- rainbow(n_ids)
+names(colors) <- all_ids
+
+# Log scale plots
+p_all_logr <- ggplot(posterior_df, aes(x = log_r, color = id)) +
+  geom_density(linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "log_r", y = "Density") +
+  theme_minimal()
+
+p_all_logq <- ggplot(posterior_df, aes(x = log_q, color = id)) +
+  geom_density(linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "log_q", y = "Density") +
+  theme_minimal()
+
+# Natural scale plots
+p_all_r <- ggplot(posterior_df, aes(x = r_value, color = id)) +
+  geom_density(linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "r_value", y = "Density") +
+  theme_minimal()
+
+p_all_q <- ggplot(posterior_df, aes(x = q_value, color = id)) +
+  geom_density(linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "q_value", y = "Density") +
+  theme_minimal()
+
+print(
+  (p_all_logr | p_all_logq) / (p_all_r | p_all_q) +
+    plot_annotation(
+      title = "Prototype Model - Posterior Density: All Participants",
+      theme = theme(plot.title = element_text(size = 14, face = "bold"))
+    )
+)
+```
+```{r}
+library(tidyverse)
+library(patchwork)
+
+draws_list  <- readRDS(here("empirical", "empirical_draws.rds"))
+all_ids     <- names(draws_list)
+
+# Extract p[trial, category] for all participants
+ppc_df <- map_dfr(all_ids, function(id) {
+  draws    <- draws_list[[id]]
+  subj_data <- transformed_data %>% filter(subject == as.numeric(id))
+  ntrials  <- nrow(subj_data)
+  
+  map_dfr(1:4, function(cat) {
+    # Get all posterior samples for p[trial, cat] 
+    col_names <- paste0("p[", 1:ntrials, ",", cat, "]")
+    p_mat     <- as.matrix(draws[, col_names])  # samples x trials
+    
+    tibble(
+      id       = id,
+      trial    = 1:ntrials,
+      category = cat,
+      p_mean   = colMeans(p_mat),
+      p_lo     = apply(p_mat, 2, quantile, 0.025),
+      p_hi     = apply(p_mat, 2, quantile, 0.975)
+    )
+  })
+})
+
+# Observed proportions — what fraction of participants chose category c on each trial
+obs_df <- map_dfr(1:4, function(cat) {
+  transformed_data %>%
+    group_by(trial) %>%
+    summarise(
+      p_obs    = mean(response == cat),
+      category = cat,
+      .groups  = "drop"
+    )
+})
+
+# Average predicted p across participants
+avg_ppc <- ppc_df %>%
+  group_by(trial, category) %>%
+  summarise(
+    p_mean = mean(p_mean),
+    p_lo   = mean(p_lo),
+    p_hi   = mean(p_hi),
+    .groups = "drop"
+  )
+
+# Plot one panel per category
+plots <- map(1:4, function(cat) {
+  ggplot() +
+    geom_ribbon(
+      data = avg_ppc %>% filter(category == cat),
+      aes(x = trial, ymin = p_lo, ymax = p_hi),
+      alpha = 0.2, fill = "steelblue"
+    ) +
+    geom_line(
+      data = avg_ppc %>% filter(category == cat),
+      aes(x = trial, y = p_mean),
+      color = "steelblue", linewidth = 0.8
+    ) +
+    geom_point(
+      data = obs_df %>% filter(category == cat),
+      aes(x = trial, y = p_obs),
+      color = "black", size = 0.8, alpha = 0.6
+    ) +
+    ylim(0, 1) +
+    labs(
+      title    = paste("Category", cat),
+      x        = "Trial",
+      y        = paste0("P(category ", cat, ")")
+    ) +
+    theme_minimal()
+})
+
+# Combine
+(plots[[1]] | plots[[2]]) / (plots[[3]] | plots[[4]]) +
+  plot_annotation(
+    title    = "Posterior Predictive Check: Prototype Model",
+    subtitle = "Line = Posterior mean | Ribbon = 95% CI | Points = Observed",
+    theme    = theme(plot.title = element_text(size = 14, face = "bold"))
+  )
+```
+
+```{r}
+predicted probability of correct category on trial 
+```
+
+```{r}
+
+```
+
