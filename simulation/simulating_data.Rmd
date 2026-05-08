@@ -146,13 +146,9 @@ mvr_kalman_update <- function(mu_prev_vec, sigma_prev_mat, obs_vec, obs_noise_ma
 
 Make agent function
 ```{r}
-#sigma diagonal vals
-sigma_diag_val <- 2.5
-mu_vec_size <- 5
-
 
 #make a function to construct a list of states/prototypes estimates consisting of a location vec, var_covar matrix and an index
-construct_state_list <- function(n_dim, n_prototypes){
+construct_state_list <- function(n_dim, n_prototypes, start_mu, start_sigma){
   
   #prep empty list
   state_list <- vector("list", n_prototypes)
@@ -160,7 +156,7 @@ construct_state_list <- function(n_dim, n_prototypes){
   # make a state for each prototype
   for (i in 1:n_prototypes){
     #make state of correct number of dimensions
-    state <- list(mu = rep(0, n_dim), sigma = diag(sigma_diag_val, n_dim) + 1, state_index = i, log_p = NULL, choice = NULL)
+    state <- list(mu = rep(start_mu, n_dim), sigma = diag(start_sigma, n_dim), state_index = i, log_p = NULL, choice = NULL)
     
     #store in list
     state_list[[i]] <- state
@@ -183,8 +179,6 @@ update_prototypes <- function(trial_features, trial_feedback, state_list, agent_
       sigma_mat <- state_list[[j]]$sigma + agent_process_noise_mat #adding drift
       state_type <- state_list[[j]]$state_index
       
-      cat("state index:", state_type)
-      cat("feedback:", trial_feedback)
       
       ## get prob of choosing prototype
       prototype_sigma <-sigma_mat + agent_obs_noise_mat
@@ -192,7 +186,7 @@ update_prototypes <- function(trial_features, trial_feedback, state_list, agent_
       
       #if prototype index corresponds to feedback then do a kalman update and update corresponding state/prototype
       if (trial_feedback == state_type){
-        print("kalman update")
+
         
         #do kalman update
         update <- mvr_kalman_update(mu_prev_vec = mu_vec, 
@@ -211,7 +205,6 @@ update_prototypes <- function(trial_features, trial_feedback, state_list, agent_
       #else just update drifted simga state_list with drift
       else{
         #
-        print("no kalman update")
         state_list[[j]]$sigma <- sigma_mat
         
       }
@@ -257,7 +250,7 @@ return(choice)
 #where:
   #features is list of n_dim vectors. One for each trial
   #feedback is a list of ints describing the state type one for each trial
-agent_loop <- function(n_dim, n_prototypes, n_trials, features, feedback, agent_obs_noise, agent_process_noise){
+agent_loop <- function(n_dim, n_prototypes, n_trials, features, feedback, agent_obs_noise, agent_process_noise, start_mu, start_sigma){
   
   ### setup agent ###
   #make agent observation noise matrix (R)
@@ -267,16 +260,13 @@ agent_loop <- function(n_dim, n_prototypes, n_trials, features, feedback, agent_
   agent_process_noise_mat = agent_process_noise * diag(n_dim)
   
   #build a state_list of prototypes. One for each prototype 
-  state_list <- construct_state_list(n_dim = n_dim, n_prototypes = n_prototypes)
+  state_list <- construct_state_list(n_dim = n_dim, n_prototypes = n_prototypes, start_mu, start_sigma)
   
   #prep empty list to store state, obs and k for each trial
   results <- vector("list", n_trials)
   
   ### run trials ###
   for (i in 1:n_trials){
-    
-    cat("trial: ", i)
-    cat("\n")
     
     ## on trial:
     #get features.     "Should prop check that features and n_dim match"
@@ -298,7 +288,7 @@ agent_loop <- function(n_dim, n_prototypes, n_trials, features, feedback, agent_
   
     
     #make newlinw
-    cat("\n")
+
   
   
     #store the state_list and behavoir
@@ -321,7 +311,7 @@ n_dim = 2
 n_prototypes = 2
 n_trials = 20
 mu_1 = c(2,1)
-mu_2 = c(10,1)
+mu_2 = c(2,1.5)
 
 #index for creating testing vectors
 feedback <- rbinom(100, size=1, prob =.5) + 1
@@ -346,7 +336,7 @@ for (i in 1:n_trials){
 results <- agent_loop(n_dim=2, 
                       n_prototypes=2,
                       n_trials=n_trials, 
-                      features=features, feedback=feedback, agent_obs_noise=0.1, agent_process_noise=0.1)
+                      features=features, feedback=feedback, agent_obs_noise=0.1, agent_process_noise=0.1, start_mu = .5, start_sigma = 10)
 
 ```
 
@@ -418,30 +408,203 @@ ggplot(results_df, aes(x = trial, y = cumulative_accuracy)) +
 
 ```{r}
 #make schedule
-n_blocks <- 3
 n_dim <- 5
-n_prototypes <- 4
+n_prototypes <- 2
 
-stimuli_combinations <- do.call(expand_grid, rep(list(0:1), n_dim))
+stimuli_combinations <- do.call(expand_grid, setNames(rep(list(0:1), n_dim), paste0("dim_", 1:n_dim)))
 
-make_stimuli_order <- function(n_blocks, n_dim, n_prototypes){
+make_stimuli_order <- function(){
+  
+  num_stimuli = 32
+  num_blocks = 3
 
-  num_stimuli <- nrow(stimuli_combinations)
+  blocks <- vector("list", num_blocks)
 
-  blocks <- vector("list", n_blocks)
-
-  for (i in 1:n_blocks){
+  for (i in 1:num_blocks){
     stimuli_order <- stimuli_combinations[sample(num_stimuli), ]
-    blocks[[i]] <- stimuli_order %>% mutate(block = i, trial_id = 1:num_stimuli)
+    blocks[[i]] <- stimuli_order %>% 
+      mutate(block = i, trial_id = 1:num_stimuli)
   }
 
-  bind_rows(blocks)
+  ##HAVENT CHECKED RULES THROUGH** 
+  bind_rows(blocks) %>%
+    mutate(
+      danger = case_when(
+        block == 1 ~ as.integer(dim_1 == 1 & dim_3 == 1),
+        block == 2 ~ as.integer(dim_4 == 1),
+        block == 3 ~ as.integer(dim_4 == 1 & dim_5 == 1)
+      ),
+      nutrition = case_when(
+        block == 1 ~ as.integer(dim_4 == 1),
+        block == 2 ~ as.integer(dim_1 + dim_2 + dim_3 >= 2),
+        block == 3 ~ as.integer(dim_1 + dim_2 + dim_3 + dim_5 >= 2)
+      ), 
+      #"Responses are 1-4, 
+      #where 3 and 4 indicate danger, 
+      #1 and 2 not danger; 
+      #2 and 4 indicate nutritious,
+      #1 and 3 not nutritious"
+      feedback = case_when(
+        danger == 0 & nutrition == 0 ~ 1,
+        danger == 0 & nutrition == 1 ~ 2,
+        danger == 1 & nutrition == 0 ~ 3,
+        danger == 1 & nutrition == 1 ~ 4
+      )
+    ) 
+}
+```
+
+```{r}
+#def function to loop over number of agents
+sim_agents <- function(n_agents, q_mean, q_sd, r_mean, r_sd, start_mu, start_sigma){
+
+  agent_results <- vector("list", n_agents)
+
+  #loop over agents
+  for (i in 1:n_agents){
+
+    #sample vals on log scale directly
+    log_q <- rnorm(1, mean = q_mean, sd = q_sd)
+    log_r <- rnorm(1, mean = r_mean, sd = r_sd)
+
+    stimuli_df <- make_stimuli_order()
+
+    features <- pmap(stimuli_df %>% dplyr::select(starts_with("dim_")), c)
+    feedback  <- stimuli_df$feedback  # remap 0/1 -> 1/2 to match state indices
+
+    results <- agent_loop(n_dim = n_dim,
+                          n_prototypes = 4,
+                          n_trials = nrow(stimuli_df),
+                          features = features,
+                          feedback = feedback,
+                          agent_obs_noise = exp(log_r),
+                          agent_process_noise = exp(log_q),
+                          start_mu = start_mu, 
+                          start_sigma = start_sigma)
+
+    agent_results[[i]] <- list(agent_id = i, log_q = log_q, log_r = log_r,
+                               stimuli_df = stimuli_df, results = results)
+  }
+
+  return(agent_results)
 }
 
-make_stimuli_order(3, 5, 4)
+test_results <- sim_agents(n_agents = 2, q_mean = -2, q_sd = 1, r_mean = 0, r_sd = 1, start_mu =.5, start_sigma = 10)
+
+# cumulative accuracy per agent
+accuracy_df <- map_dfr(seq_along(test_results), function(i) {
+  agent <- test_results[[i]]
+  n_t <- length(agent$results)
+  tibble(
+    trial    = 1:n_t,
+    agent_id = i,
+    choice   = sapply(1:n_t, function(t) agent$results[[t]]$choice),
+    feedback = agent$stimuli_df$danger + 1
+  ) %>%
+    mutate(
+      block               = ceiling(trial / 32),
+      trial_in_block      = ((trial - 1) %% 32) + 1,
+      correct             = as.integer(choice == feedback)
+    ) %>%
+    group_by(block) %>%
+    mutate(cumulative_accuracy = cumsum(correct) / trial_in_block) %>%
+    ungroup()
+})
+
+ggplot(accuracy_df, aes(x = trial_in_block, y = cumulative_accuracy, color = factor(agent_id))) +
+  geom_line() +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "gray50") +
+  ylim(0, 1) +
+  facet_wrap(~block, labeller = label_both) +
+  labs(x = "Trial within block", y = "Cumulative Accuracy", color = "Agent") +
+  theme_minimal()
+
+# prototype location trajectories (dim_1 vs dim_2)
+mu_df <- map_dfr(seq_along(test_results), function(i) {
+  agent <- test_results[[i]]
+  n_t <- length(agent$results)
+  map_dfr(1:2, function(j) {
+    map_dfr(1:n_t, function(t) {
+      mu <- agent$results[[t]]$state_list[[j]]$mu
+      tibble(trial = t, agent_id = i, prototype = j, dim_1 = mu[1], dim_2 = mu[2])
+    })
+  })
+})
+
+# add block to mu_df (32 stimuli per block)
+mu_df <- mu_df %>%
+  mutate(block = ceiling(trial / 32))
+
+# true prototype means per block (mean feature vector for each category)
+true_mus <- map_dfr(1:3, function(b) {
+  stimuli_combinations %>%
+    mutate(
+      prototype = if (b == 1) as.integer(dim_1 == 1 & dim_3 == 1) + 1
+                  else if (b == 2) as.integer(dim_4 == 1) + 1
+                  else as.integer(dim_4 == 1 & dim_5 == 1) + 1
+    ) %>%
+    group_by(prototype) %>%
+    summarise(dim_1 = mean(dim_1), dim_2 = mean(dim_2), .groups = "drop") %>%
+    mutate(block = b)
+})
+
+ggplot(mu_df, aes(x = dim_1, y = dim_2, color = factor(prototype),
+                  group = interaction(agent_id, prototype))) +
+  geom_path() +
+  geom_point(data = true_mus, aes(x = dim_1, y = dim_2, color = factor(prototype)),
+             shape = 8, size = 4, stroke = 1.5, inherit.aes = FALSE) +
+  facet_wrap(~block, labeller = label_both) +
+  labs(x = "Dim 1", y = "Dim 2", color = "Prototype",
+       caption = "Star = true prototype mean") +
+  theme_minimal()
 
 ```
 
+
+
+```{r}
+
+test_results_100 <- sim_agents(n_agents = 100, q_mean = -2, q_sd = 1, r_mean = 0, r_sd = 1, start_mu =.5, start_sigma = 10)
+```
+
+```{r}
+accuracy_df_100 <- map_dfr(seq_along(test_results_100), function(i) {
+  agent <- test_results_100[[i]]
+  n_t <- length(agent$results)
+  tibble(
+    trial    = 1:n_t,
+    agent_id = i,
+    choice   = sapply(1:n_t, function(t) agent$results[[t]]$choice),
+    feedback = agent$stimuli_df$danger + 1
+  ) %>%
+    mutate(
+      block          = ceiling(trial / 32),
+      trial_in_block = ((trial - 1) %% 32) + 1,
+      correct        = as.integer(choice == feedback)
+    ) %>%
+    group_by(block) %>%
+    mutate(cumulative_accuracy = cumsum(correct) / trial_in_block) %>%
+    ungroup()
+})
+
+accuracy_df_100 %>%
+  group_by(block, trial_in_block) %>%
+  summarise(
+    mean_acc = mean(cumulative_accuracy),
+    lo       = quantile(cumulative_accuracy, 0.1),
+    hi       = quantile(cumulative_accuracy, 0.9),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = trial_in_block, y = mean_acc)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2) +
+  geom_line() +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray50") +
+  ylim(0, 1) +
+  facet_wrap(~block, labeller = label_both) +
+  labs(x = "Trial within block", y = "Cumulative Accuracy",
+       caption = "Line = mean, ribbon = 80% interval across 100 agents") +
+  theme_minimal()
+```
 
 
 
