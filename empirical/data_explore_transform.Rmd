@@ -19,7 +19,7 @@ data <- read_delim("/Users/christianstenbro/AU/MSc/ACM/assignment_4_LOCAL/AlienD
 ```
 
 ```{r}
-data
+data$session
 ```
 
 We can remove the .jpg extension from the stimulus column (which is the feature binary codes).

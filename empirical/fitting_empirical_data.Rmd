@@ -1,0 +1,123 @@
+---
+title: "fitting_empirical_data"
+output: html_document
+---
+
+```{r}
+pacman::p_load(tidyverse, here, tidyverse, posterior, cmdstanr, brms, bayesplot, stringr, dplyr)
+```
+
+```{r}
+data <- read_delim(here("empirical/AlienData.txt"))
+```
+
+
+```{r}
+transformed_data <- data %>% select(condition, 
+                                    subject, 
+                                    trial,
+                                    session,
+                                    cycle,
+                                    category, 
+                                    response,
+                                    stimulus) %>%
+                              filter(cycle != 0) %>% 
+                              filter(condition == 1) %>% 
+                              mutate(subject = ifelse(condition == 1, subject, subject + 26)) %>% 
+                              mutate(stimulus = str_remove(stimulus, "\\.jpg$"),
+                                     eyes = str_sub(stimulus, 1, 1),
+                                     buffness = str_sub(stimulus, 2, 2),
+                                     arms = str_sub(stimulus, 3, 3),
+                                     spots = str_sub(stimulus, 4, 4),
+                                     color = str_sub(stimulus, 5, 5)
+                                    ) %>% 
+                              mutate(across(c(eyes, buffness, arms, spots, color), as.numeric)) %>% 
+                              select(-stimulus)
+```
+
+
+```{r}
+stan_file <- here("pro_model.stan")
+model <- cmdstan_model(stan_file,
+                       cpp_options = list(stan_threads = FALSE),
+                       stanc_options = list("O1"))
+fits <- list()
+
+test_ids <- c(unique(transformed_data$subject)[1:5]
+
+for (id in test_ids) {
+  
+  cat("Fitting participant", id, "\n")
+  
+  participant_data <- transformed_data %>% filter(subject == id)
+  
+  fits[[as.character(id)]] <- model$sample(
+    data = list(
+      ntrials            = nrow(participant_data),
+      nfeatures          = 5,
+      ncategories        = 4,
+      cat_true           = participant_data$category,
+      y                  = participant_data$response,
+      obs                = as.matrix(participant_data[, c("eyes", "buffness", "arms", "spots", "color")]),
+      initial_mu         = array(0.5, dim = c(4, 5)),
+      initial_sigma_diag = 1.0,
+      prior_logr_mean    = 0,
+      prior_logr_sd      = 0.5,
+      prior_logq_mean    = 0,
+      prior_logq_sd      = 0.5
+    ),
+    seed             = 123,
+    chains           = 4,
+    parallel_chains  = 4,
+    iter_warmup      = 500,
+    iter_sampling    = 1000,
+    refresh          = 500,
+    max_treedepth    = 10,
+    adapt_delta      = 0.95
+  )
+}
+
+draws_list <- lapply(fits, function(fit) as_draws_df(fit$draws()))
+saveRDS(draws_list, here("empirical", "empirical_draws.rds"))
+```
+
+
+```{r}
+# Check diagnostics immediately while temp files still exist
+for (id in names(fits)) {
+  diag <- fits[[id]]$diagnostic_summary(quiet = TRUE)
+  if (any(diag$num_divergent > 0) | any(diag$num_max_treedepth > 0)) {
+    cat("\n⚠️ Issues in participant:", id, "\n")
+    print(diag)
+  }
+}
+```
+
+```{r}
+draws_list <- readRDS(here("empirical", "empirical_draws.rds"))
+
+summaries <- list()
+
+for (id in names(draws_list)) {
+  draws <- draws_list[[id]]
+  summaries[[id]] <- summarise_draws(draws, "mean", "rhat", "ess_bulk", "ess_tail") %>%
+    filter(variable %in% c("log_r", "log_q"))
+}
+
+summary_df <- bind_rows(summaries, .id = "participant_id")
+
+cat("\n── Empirical Summary Ranges ────────────────\n")
+summary_df %>%
+  group_by(variable) %>%
+  summarise(
+    rhat_min = min(rhat,     na.rm = TRUE),
+    rhat_max = max(rhat,     na.rm = TRUE),
+    ess_min  = min(ess_bulk, na.rm = TRUE),
+    ess_max  = max(ess_bulk, na.rm = TRUE)
+  ) %>%
+  print()
+```
+
+
+
+
