@@ -417,7 +417,8 @@ grid_sim %>%
   ggtitle(paste0("Simulating kalman filter prototype agents with varying parameters (block ", block_filter, ")")) +
   labs(x = "Trial within block", y = "Cumulative Accuracy",
        caption = "Line = mean, ribbon = 80% interval across agents") +
-  theme_minimal()
+  theme_minimal() + 
+  theme(legend.position = "none")
 ```
 
 ```{r}
