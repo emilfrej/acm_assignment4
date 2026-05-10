@@ -382,6 +382,11 @@ for (row in 1:nrow(r_q_grid)){
 }
 ```
 
+```{r}
+# saving the grid search df
+write_csv(grid_sim, save_path)
+```
+
 ## Plotting accuracy
 ```{r}
 block_filter = 1
