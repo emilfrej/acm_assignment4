@@ -1,0 +1,18 @@
+---
+title: "simulated_fit_model_checks"
+output: html_document
+---
+
+```{r}
+pacman::p_load(here, cmdstanr, tidyverse, posterior, bayesplot, ggplot2, patchwork)
+```
+
+```{r}
+draws_list <- readRDS(here("simulation", "simulated_draws.rds"))
+```
+
+
+```{r}
+
+```
+

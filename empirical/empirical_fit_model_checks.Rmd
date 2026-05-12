@@ -117,97 +117,81 @@ print(
     )
 )
 ```
+
 ```{r}
-library(tidyverse)
-library(patchwork)
+all_ids <- names(draws_list)
 
-draws_list  <- readRDS(here("empirical", "empirical_draws.rds"))
-all_ids     <- names(draws_list)
-
-# Extract p[trial, category] for all participants
-ppc_df <- map_dfr(all_ids, function(id) {
-  draws    <- draws_list[[id]]
-  subj_data <- transformed_data %>% filter(subject == as.numeric(id))
-  ntrials  <- nrow(subj_data)
-  
-  map_dfr(1:4, function(cat) {
-    # Get all posterior samples for p[trial, cat] 
-    col_names <- paste0("p[", 1:ntrials, ",", cat, "]")
-    p_mat     <- as.matrix(draws[, col_names])  # samples x trials
-    
-    tibble(
-      id       = id,
-      trial    = 1:ntrials,
-      category = cat,
-      p_mean   = colMeans(p_mat),
-      p_lo     = apply(p_mat, 2, quantile, 0.025),
-      p_hi     = apply(p_mat, 2, quantile, 0.975)
-    )
-  })
-})
-
-# Observed proportions — what fraction of participants chose category c on each trial
-obs_df <- map_dfr(1:4, function(cat) {
-  transformed_data %>%
-    group_by(trial) %>%
-    summarise(
-      p_obs    = mean(response == cat),
-      category = cat,
-      .groups  = "drop"
-    )
-})
-
-# Average predicted p across participants
-avg_ppc <- ppc_df %>%
-  group_by(trial, category) %>%
-  summarise(
-    p_mean = mean(p_mean),
-    p_lo   = mean(p_lo),
-    p_hi   = mean(p_hi),
-    .groups = "drop"
+posterior_df <- map_dfr(all_ids, function(id) {
+  draws <- draws_list[[id]]
+  tibble(
+    id      = id,
+    log_r   = draws$log_r,
+    log_q   = draws$log_q,
+    r_value = draws$r_value,
+    q_value = draws$q_value
   )
-
-# Plot one panel per category
-plots <- map(1:4, function(cat) {
-  ggplot() +
-    geom_ribbon(
-      data = avg_ppc %>% filter(category == cat),
-      aes(x = trial, ymin = p_lo, ymax = p_hi),
-      alpha = 0.2, fill = "steelblue"
-    ) +
-    geom_line(
-      data = avg_ppc %>% filter(category == cat),
-      aes(x = trial, y = p_mean),
-      color = "steelblue", linewidth = 0.8
-    ) +
-    geom_point(
-      data = obs_df %>% filter(category == cat),
-      aes(x = trial, y = p_obs),
-      color = "black", size = 0.8, alpha = 0.6
-    ) +
-    ylim(0, 1) +
-    labs(
-      title    = paste("Category", cat),
-      x        = "Trial",
-      y        = paste0("P(category ", cat, ")")
-    ) +
-    theme_minimal()
 })
 
-# Combine
-(plots[[1]] | plots[[2]]) / (plots[[3]] | plots[[4]]) +
-  plot_annotation(
-    title    = "Posterior Predictive Check: Prototype Model",
-    subtitle = "Line = Posterior mean | Ribbon = 95% CI | Points = Observed",
-    theme    = theme(plot.title = element_text(size = 14, face = "bold"))
-  )
+# Prior samples — draw from the prior distributions directly
+prior_df <- tibble(
+  log_r   = rnorm(4000, mean = -1.6, sd = 0.5),
+  log_q   = rnorm(4000, mean = -4.6, sd = 0.5),
+  r_value = exp(rnorm(4000, mean = -1.6, sd = 0.5)),
+  q_value = exp(rnorm(4000, mean = -4.6, sd = 0.5))
+)
+
+# Color palette — one color per participant
+n_ids  <- length(all_ids)
+colors <- rainbow(n_ids)
+names(colors) <- all_ids
+
+# Log scale plots
+p_all_logr <- ggplot() +
+  geom_density(data = prior_df, aes(x = log_r),
+               fill = "grey50", color = NA, alpha = 0.5) +
+  geom_density(data = posterior_df, aes(x = log_r, color = id),
+               linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "log_r", y = "Density") +
+  theme_minimal()
+
+p_all_logq <- ggplot() +
+  geom_density(data = prior_df, aes(x = log_q),
+               fill = "grey50", color = NA, alpha = 0.5) +
+  geom_density(data = posterior_df, aes(x = log_q, color = id),
+               linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "log_q", y = "Density") +
+  theme_minimal()
+
+# Natural scale plots
+p_all_r <- ggplot() +
+  geom_density(data = prior_df, aes(x = r_value),
+               fill = "grey50", color = NA, alpha = 0.5) +
+  geom_density(data = posterior_df, aes(x = r_value, color = id),
+               linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "r_value", y = "Density") +
+  theme_minimal()
+
+p_all_q <- ggplot() +
+  geom_density(data = prior_df, aes(x = q_value),
+               fill = "grey50", color = NA, alpha = 0.5) +
+  geom_density(data = posterior_df, aes(x = q_value, color = id),
+               linewidth = 0.2, alpha = 0.8) +
+  scale_color_manual(values = colors, guide = "none") +
+  labs(x = "q_value", y = "Density") +
+  theme_minimal()
+
+print(
+  (p_all_logr | p_all_logq) / (p_all_r | p_all_q) +
+    plot_annotation(
+      title = "Prototype Model - Posterior Density: All Participants",
+      subtitle = "Grey fill = Prior | Colored lines = Participant posteriors",
+      theme = theme(plot.title = element_text(size = 14, face = "bold"))
+    )
+)
 ```
 
-```{r}
-predicted probability of correct category on trial 
-```
 
-```{r}
-
-```
 
