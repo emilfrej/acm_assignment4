@@ -33,7 +33,7 @@ Emil's description:
 ## Global parameters
 
 ```{r}
-n_agents <- 25
+n_agents <- 100
 n_dim <- 5
 n_prototypes <- 4
 
@@ -343,10 +343,8 @@ sim_agents <- function(n_agents, q, r, start_mu, start_sigma, condition = "A"){
 
 ```{r}
 # original plot takes: r_q_grid <- expand_grid(r = c(0.1,3,9), q = c(0.1,3,9))
-r_q_grid <- expand_grid(r = c(0.1,0.5,1), q = c(0,0.01,0.1))
+r_q_grid <- expand_grid(r = c(0.01, 0.1, 1, 10), q = c(0.01, 0.1, 1, 10))
 ```
-
-This is a 9x2 df.
 
 ```{r}
 results_list <- list()
@@ -391,8 +389,54 @@ for (row in 1:nrow(r_q_grid)){
 write_csv(grid_sim, save_path)
 ```
 
+```{r}
+grid_sim
+```
+
+
 ## Plotting accuracy
 ```{r}
+# plotting for all blocks combined
+
+grid_sim %>%
+  mutate(correct = as.integer(choice == feedback)) %>%
+  group_by(q, r, condition, block, subject_id) %>%
+  mutate(cumulative_accuracy = cumsum(correct) / trial) %>%
+  ungroup() %>%
+  mutate(facet_label = paste0("Q=", q, ", R=", r)) %>%
+  group_by(facet_label, r, condition, trial) %>%       
+  summarise(
+    mean_acc = mean(cumulative_accuracy),
+    lo       = quantile(cumulative_accuracy, 0.1),
+    hi       = quantile(cumulative_accuracy, 0.9),
+    .groups  = "drop"
+  ) %>%
+  ggplot(aes(x = trial, y = mean_acc,
+             color = factor(r), fill = factor(r))) +    
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2, color = NA) +
+  geom_line() +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray50") +
+  scale_color_viridis_d(option = "plasma", end = 0.8, name = "R") +
+  scale_fill_viridis_d(option = "plasma", end = 0.8, name = "R") +
+  ylim(0, 1) +
+  facet_wrap(~facet_label, nrow = 4, ncol = 4) +
+  ggtitle("Simulating Kalman Filter prototype agents with varying parameters (all sessions)") +
+  labs(x = "Trial", y = "Cumulative Accuracy",
+       caption = "Line = mean, ribbon = 80% interval across agents") +
+  theme_minimal(base_size = 9) +
+  theme(
+    axis.text        = element_text(size = 6.5),
+    strip.text       = element_text(size = 7.5, face = "bold"),
+    plot.title       = element_text(size = 9.5, face = "bold"),
+    legend.position  = "none"
+  )
+
+ggsave("all_sessions_grid.png", width = 8, height = 8)
+```
+
+
+```{r}
+# plotting for block 1
 block_filter = 1
 
 grid_sim %>%
@@ -405,25 +449,37 @@ grid_sim %>%
   filter(block == block_filter) %>%
   ungroup() %>%
   mutate(facet_label = paste0("Q=", q, ", R=", r)) %>%
-  group_by(facet_label, condition, trial_in_block) %>%
+ group_by(facet_label, r, condition, trial_in_block) %>%
   summarise(
     mean_acc = mean(cumulative_accuracy),
     lo       = quantile(cumulative_accuracy, 0.1),
     hi       = quantile(cumulative_accuracy, 0.9),
     .groups  = "drop"
   ) %>%
-  ggplot(aes(x = trial_in_block, y = mean_acc, color = condition, fill = condition)) +
+  ggplot(aes(x = trial_in_block, y = mean_acc,
+           color = factor(r), fill = factor(r))) +
   geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2, color = NA) +
   geom_line() +
   geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray50") +
+  scale_color_viridis_d(option = "plasma", end = 0.8, name = "R") +
+  scale_fill_viridis_d(option = "plasma", end = 0.8, name = "R") +
   ylim(0, 1) +
-  facet_wrap(~facet_label, nrow = 3, ncol = 3) +
-  ggtitle(paste0("Simulating kalman filter prototype agents with varying parameters (block ", block_filter, ")")) +
-  labs(x = "Trial within block", y = "Cumulative Accuracy",
+  facet_wrap(~facet_label, nrow = 4, ncol = 4) +
+  ggtitle("Simulating Kalman Filter prototype agents with varying parameters (session 1 only)") +
+  labs(x = "Trial", y = "Cumulative Accuracy",
        caption = "Line = mean, ribbon = 80% interval across agents") +
-  theme_minimal() + 
-  theme(legend.position = "none")
+  theme_minimal(base_size = 9) +
+  theme(
+    axis.text        = element_text(size = 6.5),
+    strip.text       = element_text(size = 7.5, face = "bold"),
+    plot.title       = element_text(size = 9.5, face = "bold"),
+    legend.position  = "none"
+  )
+
+ggsave("block_1_grid.png", width = 8, height = 8)
 ```
+
+
 
 ```{r}
 # danger and nutrition accuracy plotted separately
