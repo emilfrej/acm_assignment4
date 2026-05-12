@@ -387,20 +387,21 @@ for (row in 1:nrow(r_q_grid)){
 ```{r}
 # saving the grid search df
 write_csv(grid_sim, save_path)
+
 ```
 
 ```{r}
 grid_sim
 ```
 
-
 ## Plotting accuracy
+
 ```{r}
 # plotting for all blocks combined
 
 grid_sim %>%
   mutate(correct = as.integer(choice == feedback)) %>%
-  group_by(q, r, condition, block, subject_id) %>%
+  group_by(q, r, condition, subject_id) %>%
   mutate(cumulative_accuracy = cumsum(correct) / trial) %>%
   ungroup() %>%
   mutate(facet_label = paste0("Q=", q, ", R=", r)) %>%
@@ -416,6 +417,8 @@ grid_sim %>%
   geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2, color = NA) +
   geom_line() +
   geom_hline(yintercept = 0.25, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = seq(96/3, 96, by = 96/3),
+           linetype = "dotted", color = "gray70", linewidth = 0.4) +
   scale_color_viridis_d(option = "plasma", end = 0.8, name = "R") +
   scale_fill_viridis_d(option = "plasma", end = 0.8, name = "R") +
   ylim(0, 1) +
@@ -433,7 +436,6 @@ grid_sim %>%
 
 ggsave("all_sessions_grid.png", width = 8, height = 8)
 ```
-
 
 ```{r}
 # plotting for block 1
@@ -478,8 +480,6 @@ grid_sim %>%
 
 ggsave("block_1_grid.png", width = 8, height = 8)
 ```
-
-
 
 ```{r}
 # danger and nutrition accuracy plotted separately
