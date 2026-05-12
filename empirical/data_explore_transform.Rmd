@@ -10,27 +10,41 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-pacman::p_load("here", "tidyverse")
+pacman::p_load(tidyverse, here, tidyverse, posterior, cmdstanr, brms, bayesplot, stringr, dplyr, ggplot2)
 ```
 
 ```{r}
-# loading data
-data <- read_delim("/Users/christianstenbro/AU/MSc/ACM/assignment_4_LOCAL/AlienData.txt")
+data <- read_delim(here("empirical/AlienData.txt"))
 ```
+
 
 ```{r}
-data$session
+transformed_data <- data %>% select(condition, 
+                                    subject, 
+                                    trial,
+                                    session,
+                                    cycle,
+                                    category, 
+                                    response,
+                                    stimulus) %>%
+                              filter(cycle != 0) %>% 
+                              filter(condition == 1) %>% 
+                              mutate(subject = ifelse(condition == 1, subject, subject + 26)) %>% 
+                              mutate(stimulus = str_remove(stimulus, "\\.jpg$"),
+                                     eyes = str_sub(stimulus, 1, 1),
+                                     buffness = str_sub(stimulus, 2, 2),
+                                     arms = str_sub(stimulus, 3, 3),
+                                     spots = str_sub(stimulus, 4, 4),
+                                     color = str_sub(stimulus, 5, 5)
+                                    ) %>% 
+                              mutate(across(c(eyes, buffness, arms, spots, color), as.numeric)) %>% 
+                              select(-stimulus)
 ```
 
-We can remove the .jpg extension from the stimulus column (which is the feature binary codes).
-
-```{r}
-data$stimulus <- str_replace(data$stimulus, ".jpg", "")
-```
 
 # understanding the variables
 ```{r}
-summary(data)
+summary(transformed_data)
 ```
 
 What are these variables? 
@@ -52,31 +66,9 @@ Which might be (probably are) relevant for the modelling. I wonder how we can le
 
 Notice: "You should then visually explore the empirical data and fit the Stan model to them. **Fitting the model by participant and sticking to 1 session** is sufficient to pass."
 
-# data subset
-
-First, we select only the relevant columns and remove data that are not session 1: 
 
 ```{r}
-data_subset <- data %>% select(condition, 
-                               subject, 
-                               session,
-                               cycle,
-                               trial,
-                               test,
-                               stimulus,
-                               category,
-                               response,
-                               dangerous,
-                               nutricious,
-                               correct) %>% filter(session == 1)
-```
-
-```{r}
-data_subset
-```
-
-```{r}
-length(unique(data_subset$subject))
+length(unique(transformed_data$subject))
 ```
 
 # data visualization
@@ -86,4 +78,84 @@ How can we start exploring this data?
 Perhaps a good first step would be to visualize, for a few round, how a participant updates their responses based on the feedback.
 
 Potential problem: We are modelling a four-option response (tracking two binary dimensions) as a two-option response. How do we go about this practically? Did the participants receive direct feedback on whether their categorization was correct on both dimensions, or just a black-box correct/incorrect feedback?
+```{r}
+transformed_data %>%
+  group_by(subject, session) %>%
+  summarise(n = n()) %>%
+  arrange(desc(n))
+```
+
+
+```{r}
+accuracy_data <- transformed_data %>%
+  mutate(correct = as.numeric(category == response)) %>%
+  group_by(subject, session) %>%
+  summarise(
+    accuracy = mean(correct, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+group_means <- accuracy_data %>%
+  group_by(session) %>%
+  summarise(mean_accuracy = mean(accuracy, na.rm = TRUE))
+```
+
+```{r}
+ggplot(filter(accuracy_data, session == 1),
+       aes(x = factor(subject), y = accuracy)) +
+  geom_col(alpha = 0.5) +
+
+  # chance level
+  geom_hline(yintercept = 0.25, linetype = "dashed") +
+
+  # group mean
+  geom_hline(
+    yintercept = group_means$mean_accuracy[group_means$session == 1],
+    color = "red",
+    linewidth = 1
+  ) +
+
+  labs(
+    x = "Subject",
+    y = "Accuracy (%)"
+  ) +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_classic()
+
+```
+```{r}
+ggplot(filter(accuracy_data, session == 2),
+       aes(x = factor(subject), y = accuracy)) +
+  geom_col(alpha = 0.5) +
+  geom_hline(yintercept = 0.25, linetype = "dashed") +
+  geom_hline(
+    yintercept = group_means$mean_accuracy[group_means$session == 2],
+    color = "red",
+    linewidth = 1
+  ) +
+  labs(
+    x = "Subject",
+    y = "Accuracy (%)"
+  ) +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_classic()
+```
+
+```{r}
+ggplot(filter(accuracy_data, session == 3),
+       aes(x = factor(subject), y = accuracy)) +
+  geom_col(alpha = 0.5) +
+  geom_hline(yintercept = 0.25, linetype = "dashed") +
+  geom_hline(
+    yintercept = group_means$mean_accuracy[group_means$session == 3],
+    color = "red",
+    linewidth = 1
+  ) +
+  labs(
+    x = "Subject",
+    y = "Accuracy (%)"
+  ) +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_classic()
+```
 
