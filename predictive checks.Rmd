@@ -1,0 +1,404 @@
+---
+title: "Predictive Checks"
+author: "Bryan Roemelt"
+date: "2026-05-12"
+output: html_document
+---
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(tidyverse, here, posterior, cmdstanr, patchwork, mvtnorm)
+
+draws_list <- readRDS(here("empirical", "empirical_draws.rds"))
+sim_draws_list <- readRDS(here("simulation", "simulated_draws.rds"))
+```
+
+## ── Kalman filter in R ───────────────────────────────────────────────────────
+```{r}
+run_kalman <- function(r_value, q_value, stan_data) {
+  ntrials     <- stan_data$ntrials
+  nfeatures   <- stan_data$nfeatures
+  ncategories <- stan_data$ncategories
+  mu          <- stan_data$initial_mu
+  sigma       <- lapply(1:ncategories, function(c)
+    diag(stan_data$initial_sigma_diag, nfeatures))
+  r_mat       <- diag(r_value, nfeatures)
+  q_mat       <- diag(q_value, nfeatures)
+  I_mat       <- diag(nfeatures)
+  preds       <- integer(ntrials)
+
+  for (i in seq_len(ntrials)) {
+    # Predict
+    sigma <- lapply(sigma, function(s) s + q_mat)
+
+    # Decide
+    x         <- stan_data$obs[i, ]
+    log_probs <- sapply(1:ncategories, function(c)
+      dmvnorm(x, mean = mu[[c]], sigma = sigma[[c]] + r_mat, log = TRUE))
+    probs     <- exp(log_probs) / sum(exp(log_probs))
+    preds[i]  <- sample(1:ncategories, 1, prob = probs)
+
+    # Update true category
+    c_true        <- stan_data$cat_true[i]
+    innov         <- x - mu[[c_true]]
+    S             <- sigma[[c_true]] + r_mat
+    K             <- sigma[[c_true]] %*% solve(S)
+    IK            <- I_mat - K
+    mu[[c_true]]  <- mu[[c_true]] + K %*% innov
+    sigma[[c_true]] <- IK %*% sigma[[c_true]] %*% t(IK) + K %*% r_mat %*% t(K)
+    sigma[[c_true]] <- 0.5 * (sigma[[c_true]] + t(sigma[[c_true]]))
+  }
+  preds
+}
+```
+
+
+# ── Empirical checks ──────────────────────────────────────────────────────────
+
+## ── Stan data builder for empirical ──────────────────────────────────────────
+```{r}
+make_stan_data <- function(id) {
+  participant_data <- transformed_data %>% filter(subject == id)
+  list(
+    ntrials            = nrow(participant_data),
+    nfeatures          = 5,
+    ncategories        = 4,
+    cat_true           = participant_data$category,
+    y                  = participant_data$response,
+    obs                = as.matrix(participant_data[, c("eyes", "buffness", "arms", "spots", "color")]),
+    initial_mu         = lapply(1:4, function(c) rep(0.5, 5)),
+    initial_sigma_diag = 1.0,
+    prior_logr_mean    = log(0.2),
+    prior_logr_sd      = 0.5,
+    prior_logq_mean    = log(0.01),
+    prior_logq_sd      = 0.5
+  )
+}
+```
+
+## ── Prior predictive ─────────────────────────────────────────────────────────
+```{r}
+generate_prior_ppc <- function(stan_data, participant_id, n_draws = 500) {
+  logr <- rnorm(n_draws, log(0.2), 0.5)
+  logq <- rnorm(n_draws, log(0.01), 0.5)
+
+  curves <- map_dfr(seq_len(n_draws), function(s) {
+    preds   <- run_kalman(exp(logr[s]), exp(logq[s]), stan_data)
+    correct <- as.integer(preds == stan_data$cat_true)
+    tibble(
+      sample_id = s,
+      trial     = seq_len(stan_data$ntrials),
+      correct   = correct
+    ) |> mutate(cum_acc = cumsum(correct) / row_number())
+  })
+
+  curves |>
+    group_by(trial) |>
+    summarise(
+      q05 = quantile(cum_acc, 0.05),
+      q25 = quantile(cum_acc, 0.25),
+      q50 = median(cum_acc),
+      q75 = quantile(cum_acc, 0.75),
+      q95 = quantile(cum_acc, 0.95),
+      .groups = "drop"
+    ) |>
+    mutate(
+      obs = cumsum(stan_data$y == stan_data$cat_true) / seq_len(stan_data$ntrials),
+      ID  = participant_id
+    )
+}
+```
+
+## ── Posterior predictive ─────────────────────────────────────────────────────
+```{r}
+generate_post_ppc <- function(draws, stan_data, participant_id) {
+  # Extract p[i] draws — one row per draw, one column per trial
+  p_cols  <- grep("^p\\[", names(draws), value = TRUE)
+  p_draws <- as.matrix(draws[, p_cols])  # n_draws x (ntrials * ncategories)
+
+  # Extract per-trial probability vectors and simulate responses
+  ntrials     <- stan_data$ntrials
+  ncategories <- stan_data$ncategories
+
+  yrep <- t(sapply(seq_len(nrow(p_draws)), function(d) {
+    sapply(seq_len(ntrials), function(i) {
+      cols  <- seq((i - 1) * ncategories + 1, i * ncategories)
+      probs <- as.numeric(p_draws[d, cols])
+      sample(1:ncategories, 1, prob = probs)
+    })
+  }))
+
+  # Cumulative accuracy per draw
+  yrep_correct  <- sweep(yrep, 2, stan_data$cat_true, "==") + 0
+  yrep_cum_acc  <- t(apply(yrep_correct, 1,
+                           function(r) cumsum(r) / seq_along(r)))
+
+  obs_cum_acc <- cumsum(stan_data$y == stan_data$cat_true) / seq_len(ntrials)
+
+  tibble(
+    trial = seq_len(ntrials),
+    q05   = apply(yrep_cum_acc, 2, quantile, 0.05),
+    q25   = apply(yrep_cum_acc, 2, quantile, 0.25),
+    q50   = apply(yrep_cum_acc, 2, quantile, 0.50),
+    q75   = apply(yrep_cum_acc, 2, quantile, 0.75),
+    q95   = apply(yrep_cum_acc, 2, quantile, 0.95),
+    obs   = obs_cum_acc,
+    ID    = participant_id
+  )
+}
+```
+
+## ── Generate predictions with progress tracker ───────────────────────────────
+```
+prior_ppc <- imap_dfr(draws_list, function(draws, id)
+  generate_prior_ppc(make_stan_data(id), participant_id = id))
+
+post_ppc <- imap_dfr(draws_list, function(draws, id)
+  generate_post_ppc(draws, make_stan_data(id), participant_id = id))
+```
+
+```{r}
+n_subjects <- length(draws_list)
+
+cat("Generating prior predictive checks...\n")
+prior_ppc <- imap_dfr(draws_list, function(draws, id) {
+  cat(sprintf("  Prior  - participant %s / %d\n", id, n_subjects))
+  generate_prior_ppc(make_stan_data(id), participant_id = id)
+})
+
+cat("Generating posterior predictive checks...\n")
+post_ppc <- imap_dfr(draws_list, function(draws, id) {
+  cat(sprintf("  Posterior - participant %s / %d\n", id, n_subjects))
+  generate_post_ppc(draws, make_stan_data(id), participant_id = id)
+})
+
+cat("Done.\n")
+```
+
+## ── Plot empirical checks ────────────────────────────────────────────────────
+```{r}
+p_emp_prior <- ggplot(prior_ppc, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), fill = "#c97b6e", alpha = 0.20) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#c97b6e", alpha = 0.40) +
+  geom_line(aes(y = q50), color = "#a85a4a", linewidth = 1) +
+  geom_line(aes(y = obs, group = ID), color = "#333333",
+            linewidth = 0.5, alpha = 0.3) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "grey50") +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  labs(
+    title    = "Prior Predictive Check: Empirical Data",
+    subtitle = "Ribbons: 50% and 90% prior predictive intervals | Grey: simulated agents",
+    x = "Trial", y = "Cumulative Accuracy"
+  ) +
+  theme_classic()
+
+p_emp_post <- ggplot(post_ppc, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), fill = "#6e8fc9", alpha = 0.20) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#6e8fc9", alpha = 0.40) +
+  geom_line(aes(y = q50), color = "#4a6fa5", linewidth = 1) +
+  geom_line(aes(y = obs, group = ID), color = "#333333",
+            linewidth = 0.5, alpha = 0.3) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "grey50") +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  labs(
+    title    = "Posterior Predictive Check: Empirical Data",
+    subtitle = "Ribbons: 50% and 90% posterior predictive intervals | Grey: participant observations",
+    x = "Trial", y = "Cumulative Accuracy"
+  ) +
+  theme_classic()
+
+p_emp_prior
+p_emp_post
+```
+
+## ── Numerical summaries ──────────────────────────────────────────────────────
+```{r}
+bind_rows(
+  prior_ppc %>% mutate(check = "Prior"),
+  post_ppc  %>% mutate(check = "Posterior")
+) %>%
+  group_by(check) %>%
+  summarise(
+    mean_width = mean(q95 - q05),
+    coverage   = mean(obs >= q05 & obs <= q95),
+    mae        = mean(abs(q50 - obs))
+  )
+```
+
+# ── Simulation checks ─────────────────────────────────────────────────────────
+
+## ── Stan data builder for simulation ─────────────────────────────────────────
+
+```{r}
+make_stan_data_sim <- function(id) {
+  participant_data <- sim_data %>% filter(subject_id == id)
+  list(
+    ntrials            = nrow(participant_data), #96
+    nfeatures          = 5,
+    ncategories        = 4,
+    cat_true           = participant_data$feedback,
+    y                  = participant_data$choice,
+    obs                = as.matrix(participant_data[, c("eyes", "buffness", "arms", "spots", "color")]),
+    initial_mu         = lapply(1:4, function(c) rep(0.5, 5)),
+    initial_sigma_diag = 1.0,
+    prior_logr_mean    = 0,
+    prior_logr_sd      = 1,
+    prior_logq_mean    = -2,
+    prior_logq_sd      = 1
+  )
+}
+```
+
+## ── Prior predictive ─────────────────────────────────────────────────────────
+
+```{r}
+generate_prior_ppc <- function(stan_data, participant_id, n_draws = 500) {
+  logr <- rnorm(n_draws, 0, 1)
+  logq <- rnorm(n_draws, -2, 1)
+
+  curves <- map_dfr(seq_len(n_draws), function(s) {
+    preds   <- run_kalman(exp(logr[s]), exp(logq[s]), stan_data)
+    correct <- as.integer(preds == stan_data$cat_true)
+    tibble(
+      sample_id = s,
+      trial     = seq_len(stan_data$ntrials),
+      correct   = correct
+    ) |> mutate(cum_acc = cumsum(correct) / row_number())
+  })
+
+  curves |>
+    group_by(trial) |>
+    summarise(
+      q05 = quantile(cum_acc, 0.05),
+      q25 = quantile(cum_acc, 0.25),
+      q50 = median(cum_acc),
+      q75 = quantile(cum_acc, 0.75),
+      q95 = quantile(cum_acc, 0.95),
+      .groups = "drop"
+    ) |>
+    mutate(
+      obs = cumsum(stan_data$y == stan_data$cat_true) / seq_len(stan_data$ntrials),
+      ID  = participant_id
+    )
+}
+```
+
+## ── Posterior predictive ─────────────────────────────────────────────────────
+
+```{r}
+generate_post_ppc <- function(draws, stan_data, participant_id) {
+  # Extract p[i] draws — one row per draw, one column per trial
+  p_cols  <- grep("^p\\[", names(draws), value = TRUE)
+  p_draws <- as.matrix(draws[, p_cols])  # n_draws x (ntrials * ncategories)
+
+  # Extract per-trial probability vectors and simulate responses
+  ntrials     <- stan_data$ntrials
+  ncategories <- stan_data$ncategories
+
+  yrep <- t(sapply(seq_len(nrow(p_draws)), function(d) {
+    sapply(seq_len(ntrials), function(i) {
+      cols  <- seq((i - 1) * ncategories + 1, i * ncategories)
+      probs <- as.numeric(p_draws[d, cols])
+      sample(1:ncategories, 1, prob = probs)
+    })
+  }))
+
+  # Cumulative accuracy per draw
+  yrep_correct  <- sweep(yrep, 2, stan_data$cat_true, "==") + 0
+  yrep_cum_acc  <- t(apply(yrep_correct, 1,
+                           function(r) cumsum(r) / seq_along(r)))
+
+  obs_cum_acc <- cumsum(stan_data$y == stan_data$cat_true) / seq_len(ntrials)
+
+  tibble(
+    trial = seq_len(ntrials),
+    q05   = apply(yrep_cum_acc, 2, quantile, 0.05),
+    q25   = apply(yrep_cum_acc, 2, quantile, 0.25),
+    q50   = apply(yrep_cum_acc, 2, quantile, 0.50),
+    q75   = apply(yrep_cum_acc, 2, quantile, 0.75),
+    q95   = apply(yrep_cum_acc, 2, quantile, 0.95),
+    obs   = obs_cum_acc,
+    ID    = participant_id
+  )
+}
+```
+
+## ── Generate predictions (run once) ──────────────────────────────────────────
+
+```
+sim_prior_ppc <- imap_dfr(sim_draws_list, function(draws, id)
+  generate_prior_ppc(make_stan_data_sim(id), participant_id = id))
+
+sim_post_ppc <- imap_dfr(sim_draws_list, function(draws, id)
+  generate_post_ppc(draws, make_stan_data_sim(id), participant_id = id))
+```
+
+```{r}
+n_subjects <- length(sim_draws_list)
+
+cat("Generating prior predictive checks...\n")
+sim_prior_ppc <- imap_dfr(sim_draws_list, function(draws, id) {
+  cat(sprintf("  Prior  - participant %s / %d\n", id, n_subjects))
+  generate_prior_ppc(make_stan_data_sim(id), participant_id = id)
+})
+
+cat("Generating posterior predictive checks...\n")
+sim_post_ppc <- imap_dfr(sim_draws_list, function(draws, id) {
+  cat(sprintf("  Posterior - participant %s / %d\n", id, n_subjects))
+  generate_post_ppc(draws, make_stan_data_sim(id), participant_id = id)
+})
+
+cat("Done.\n")
+```
+
+## ── Plot simulation checks ───────────────────────────────────────────────────
+
+```{r}
+p_sim_prior <- ggplot(sim_prior_ppc, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), fill = "#c97b6e", alpha = 0.20) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#c97b6e", alpha = 0.40) +
+  geom_line(aes(y = q50), color = "#a85a4a", linewidth = 1) +
+  geom_line(aes(y = obs, group = ID), color = "#333333",
+            linewidth = 0.5, alpha = 0.3) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "grey50") +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  labs(
+    title    = "Prior Predictive Check: Simulated Data",
+    subtitle = "Ribbons: 50% and 90% prior predictive intervals | Grey: simulated agents",
+    x = "Trial", y = "Cumulative Accuracy"
+  ) +
+  theme_classic()
+
+p_sim_post <- ggplot(sim_post_ppc, aes(x = trial)) +
+  geom_ribbon(aes(ymin = q05, ymax = q95), fill = "#6e8fc9", alpha = 0.20) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), fill = "#6e8fc9", alpha = 0.40) +
+  geom_line(aes(y = q50), color = "#4a6fa5", linewidth = 1) +
+  geom_line(aes(y = obs, group = ID), color = "#333333",
+            linewidth = 0.5, alpha = 0.3) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", color = "grey50") +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  labs(
+    title    = "Posterior Predictive Check: Simulated Data",
+    subtitle = "Ribbons: 50% and 90% posterior predictive intervals | Grey: simulated agents",
+    x = "Trial", y = "Cumulative Accuracy"
+  ) +
+  theme_classic()
+
+p_sim_prior
+p_sim_post
+```
+
+## ── Numerical summaries ──────────────────────────────────────────────────────
+```{r}
+bind_rows(
+  sim_prior_ppc %>% mutate(check = "Prior"),
+  sim_post_ppc  %>% mutate(check = "Posterior")
+) %>%
+  group_by(check) %>%
+  summarise(
+    mean_width = mean(q95 - q05),
+    coverage   = mean(obs >= q05 & obs <= q95),
+    mae        = mean(abs(q50 - obs))
+  )
+```
