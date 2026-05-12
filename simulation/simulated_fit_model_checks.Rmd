@@ -8,11 +8,118 @@ pacman::p_load(here, cmdstanr, tidyverse, posterior, bayesplot, ggplot2, patchwo
 ```
 
 ```{r}
+data <- read_delim(here("simulation", "simulated_data.csv"))
+
 draws_list <- readRDS(here("simulation", "simulated_draws.rds"))
+```
+
+```{r}
+# After fitting, extract posterior means and compare to true values
+recovery_df <- map_dfr(names(draws_list), function(id) {
+  draws <- draws_list[[id]]
+  true_vals <- data %>% 
+    filter(subject_id == as.numeric(id)) %>% 
+    slice(1)  # same value repeated for all trials
+  
+  tibble(
+    id         = id,
+    true_log_r = true_vals$log_r,
+    true_log_q = true_vals$log_q,
+    est_log_r  = mean(draws$log_r),
+    est_log_q  = mean(draws$log_q),
+    q_est_95_width = quantile((draws$log_q), probs = c(.975)) - quantile((draws$log_q), probs = c(.025)),
+    r_est_95_width = quantile((draws$log_r), probs = c(.975)) - quantile((draws$log_r), probs = c(.025))
+
+    
+  )
+})
+
+# Plot true vs estimated
+ggplot(recovery_df, aes(x = true_log_q, y = est_log_q)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = true_log_q-q_est_95_width, ymax=true_log_q+q_est_95_width)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Parameter Recovery: log_q",
+       x = "True value", y = "Estimated posterior mean") +
+  theme_minimal()
+
+
+# Plot true vs estimated
+ggplot(recovery_df, aes(x = true_log_r, y = est_log_r)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = true_log_r-r_est_95_width, ymax=true_log_r+r_est_95_width)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Parameter Recovery: log_r",
+       x = "True value", y = "Estimated posterior mean") +
+  theme_minimal()
+```
+```{r}
+# Helper functions
+make_update_df <- function(prior, posterior) {
+  bind_rows(
+    tibble(value = prior,     type = "Prior"),
+    tibble(value = posterior, type = "Posterior")
+  )
+}
+
+make_update_plot <- function(df, title, xlab, true_val = NULL) {
+  p <- ggplot(df, aes(x = value, fill = type, color = type)) +
+    geom_density(alpha = 0.3) +
+    scale_fill_manual(values  = c("Prior" = "blue", "Posterior" = "red")) +
+    scale_color_manual(values = c("Prior" = "blue", "Posterior" = "red")) +
+    labs(title = title, x = xlab, y = "Density", fill = NULL, color = NULL) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # Add true value line if provided
+  if (!is.null(true_val)) {
+    p <- p + geom_vline(xintercept = true_val, 
+                        linetype = "dashed", 
+                        color = "black", 
+                        linewidth = 0.8)
+  }
+  return(p)
+}
 ```
 
 
 ```{r}
-
+# Plots for selected participants
+for (id in c("4", "10", "24")) {
+  
+  draws <- draws_list[[id]]
+  
+  # Get true values for this participant from simulated data
+  true_vals <- data %>% 
+    filter(subject_id == as.numeric(id)) %>% 
+    slice(1)
+  
+  true_log_r <- true_vals$log_r
+  true_log_q <- true_vals$log_q
+  true_r     <- exp(true_log_r)
+  true_q     <- exp(true_log_q)
+  
+  # On log scale
+  df_logr <- make_update_df(draws$logr_prior, draws$log_r)
+  df_logq <- make_update_df(draws$logq_prior, draws$log_q)
+  
+  # On natural scale
+  df_r <- make_update_df(exp(draws$logr_prior), draws$r_value)
+  df_q <- make_update_df(exp(draws$logq_prior), draws$q_value)
+  
+  p_logr <- make_update_plot(df_logr, title = "Log R",             xlab = "log_r",   true_val = true_log_r)
+  p_logq <- make_update_plot(df_logq, title = "Log Q",             xlab = "log_q",   true_val = true_log_q)
+  p_r    <- make_update_plot(df_r,    title = "R (natural scale)", xlab = "r_value", true_val = true_r)
+  p_q    <- make_update_plot(df_q,    title = "Q (natural scale)", xlab = "q_value", true_val = true_q) + xlim(0, 1)
+  
+  print(
+    (p_logr | p_logq) / (p_r | p_q) +
+      plot_annotation(
+        title = paste("Prior-Posterior Update: Participant", id),
+        caption = "Dashed line = true simulated value",
+        theme = theme(plot.title = element_text(size = 14, face = "bold"))
+      )
+  )
+}
 ```
 

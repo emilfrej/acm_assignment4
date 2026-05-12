@@ -13,7 +13,7 @@ pacman::p_load(tidyverse, here, tidyverse, posterior, cmdstanr, brms, bayesplot,
 ```
 
 ```{r}
-data <- read_delim(here("simulation", "data_file_name_here.csv"))
+data <- read_delim(here("simulation", "simulated_data.csv"))
 ```
 
 
@@ -24,26 +24,26 @@ model <- cmdstan_model(stan_file,
                        stanc_options = list("O1"))
 fits <- list()
 
-for (id in c(unique(data$subject))) {
+for (id in c(unique(data$subject_id))) {
   
   cat("Fitting participant", id, "\n")
   
-  participant_data <- transformed_data %>% filter(subject == id)
+  participant_data <- data %>% filter(subject_id == id)
   
   fits[[as.character(id)]] <- model$sample(
     data = list(
       ntrials            = nrow(participant_data),
       nfeatures          = 5,
       ncategories        = 4,
-      cat_true           = participant_data$category,
-      y                  = participant_data$response,
+      cat_true           = participant_data$feedback,
+      y                  = participant_data$choice,
       obs                = as.matrix(participant_data[, c("eyes", "buffness", "arms", "spots", "color")]),
       initial_mu         = array(0.5, dim = c(4, 5)),
       initial_sigma_diag = 1.0,
       prior_logr_mean    = 0,
-      prior_logr_sd      = 0.5,
-      prior_logq_mean    = 0,
-      prior_logq_sd      = 0.5
+      prior_logr_sd      = 1,
+      prior_logq_mean    = -2,
+      prior_logq_sd      = 1
     ),
     seed             = 123,
     chains           = 4,
@@ -73,7 +73,7 @@ for (id in names(fits)) {
 ```
 
 ```{r}
-draws_list <- readRDS(here("empirical", "empirical_draws.rds"))
+draws_list <- readRDS(here("simulation", "simulated_draws.rds"))
 
 summaries <- list()
 
