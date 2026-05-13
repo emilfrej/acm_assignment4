@@ -186,7 +186,7 @@ p_all_q <- ggplot() +
 print(
   (p_all_logr | p_all_logq) / (p_all_r | p_all_q) +
     plot_annotation(
-      title = "Prototype Model - Posterior Density: All Participants",
+      title = "Prototype Model - Posterior Density: All Participants, session 1 only",
       subtitle = "Grey fill = Prior | Colored lines = Participant posteriors",
       theme = theme(plot.title = element_text(size = 14, face = "bold"))
     )
